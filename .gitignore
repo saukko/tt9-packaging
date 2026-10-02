@@ -1,0 +1,7 @@
+out/
+tt9-data/
+tt9-notices/
+RPMS/
+__pycache__/
+files.list
+documentation.list
