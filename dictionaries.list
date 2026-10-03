@@ -1,0 +1,5 @@
+# Copyright (c) 2026 Jolla Mobile Ltd.
+# Word lists built into /usr/share/tt9 as <locale>.sqlite.
+# Key mappings for every language are languages.list.
+en
+fi-FI

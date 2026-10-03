@@ -1,7 +1,7 @@
 # Copyright (c) 2026 Jolla Mobile Ltd.
 
 Name:       tt9
-Summary:    Predictive dictionaries for the Sailfish keypad
+Summary:    Keypad layouts and predictive dictionaries for Sailfish
 Version:    1.0
 Release:    1
 # The builder is Apache-2.0. Each word list has its own terms; see %%license.
@@ -12,13 +12,15 @@ Source0:    %{name}-%{version}.tar.bz2
 BuildRequires: python3-base
 
 %description
-Word lists and keypad layouts from Traditional T9, built into the layout
-and sqlite pairs the Sailfish keypad reads from %{_datadir}/tt9.
-languages.list currently names English and Finnish. A language is offered
-only when both of its files are installed.
+Keypad layouts from Traditional T9, one <locale>.layout per language, plus
+word lists for the locales named in dictionaries.list. The Sailfish keypad
+reads both from %{_datadir}/tt9. A layout is enough for the letters.
+Prediction needs the matching sqlite file. dictionaries.list currently
+names English and Finnish.
 
 The source archive unpacks to %{name}-%{version}/ and contains
-build-dictionaries.py, languages.list and the tt9/ submodule checkout.
+build-dictionaries.py, languages.list, dictionaries.list and the tt9/
+submodule checkout.
 
 %prep
 %autosetup -n %{name}-%{version}
@@ -27,7 +29,8 @@ build-dictionaries.py, languages.list and the tt9/ submodule checkout.
 # Relative output: mb2 skips %%prep and runs this in the repository, where
 # the tt9 submodule is already checked out. A full rpmbuild does the same
 # after %%autosetup, inside the unpacked archive.
-python3 build-dictionaries.py --output tt9-data --notices tt9-notices --from-list languages.list
+python3 build-dictionaries.py --output tt9-data --notices tt9-notices \
+    --from-list languages.list --dictionaries dictionaries.list
 
 %install
 mkdir -p %{buildroot}%{_datadir}/tt9

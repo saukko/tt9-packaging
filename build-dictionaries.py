@@ -1,14 +1,13 @@
 #!/usr/bin/env python3
 # Copyright (c) 2026 Jolla Mobile Ltd.
-"""Build keypad dictionaries from the tt9 submodule.
+"""Build keypad layouts, and word lists for selected languages.
 
-Each language definition becomes <locale>.layout and <locale>.sqlite. The
-keyboard reads those pairs from /usr/share/tt9 and offers only the ones that
-are installed. Alphabetic layouts only: a word is kept when every character
-belongs to one key.
+Every requested definition becomes <locale>.layout. A <locale>.sqlite word
+list is written only for locales named with --dictionaries. The keyboard
+uses a layout on its own. Prediction needs the sqlite file.
 
-  python3 build-dictionaries.py --output out
-  python3 build-dictionaries.py --only en --output /tmp/tt9-en
+  python3 build-dictionaries.py --output out --from-list languages.list \\
+      --dictionaries dictionaries.list
 """
 
 import argparse
@@ -71,33 +70,54 @@ def expand_token(token):
     return list(token)
 
 
+def parse_list_body(line):
+    body = line[line.find("[") + 1 : line.rfind("]")]
+    return [token.strip() for token in body.split(",") if token.strip()]
+
+
 def parse_definition(path):
     locale = ""
     dictionary = ""
     keys = {}
+    sounds = {}
+    section = ""
     order = 0
     for raw in path.read_text(encoding="utf-8").splitlines():
         line = raw.split("#", 1)[0].strip()
+        if not line:
+            continue
         if line.startswith("locale:"):
             locale = line.split(":", 1)[1].strip()
+            section = ""
         elif line.startswith("dictionaryFile:"):
             dictionary = line.split(":", 1)[1].strip()
-        elif line.startswith("- ["):
+            section = ""
+        elif line.startswith("layout:"):
+            section = "layout"
+            order = 0
+        elif line.startswith("sounds:"):
+            section = "sounds"
+        elif line.endswith(":") and not line.startswith("-"):
+            section = ""
+        elif section == "layout" and line.startswith("- ["):
             comment = raw.split("#", 1)[1].strip() if "#" in raw else ""
             try:
                 index = int(comment.split()[0])
             except (ValueError, IndexError):
                 index = order
             order += 1
-            body = line[line.find("[") + 1 : line.rfind("]")]
             chars = []
-            for token in body.split(","):
-                token = token.strip()
-                if token:
-                    chars.extend(expand_token(token))
+            for token in parse_list_body(line):
+                chars.extend(expand_token(token))
             if 0 <= index <= 9 and chars:
                 keys[str(index)] = "".join(chars)
-    return locale, dictionary, keys
+        elif section == "sounds" and line.startswith("- ["):
+            # [sound, digits]. The longer sound has to win later, so "Ng" is
+            # not read as "N" plus a leftover.
+            parts = parse_list_body(line)
+            if len(parts) >= 2:
+                sounds[parts[0]] = parts[1]
+    return locale, dictionary, keys, sounds
 
 
 def load_mapping(keys):
@@ -118,7 +138,33 @@ def digit_sequence(word, mapping):
     return "".join(sequence) if sequence else None
 
 
-def collect_words(csv_path, mapping):
+def sound_sequence(transcription, sounds, ordered):
+    position = 0
+    digits = []
+    while position < len(transcription):
+        matched = None
+        for sound in ordered:
+            if transcription.startswith(sound, position):
+                matched = sound
+                break
+        if matched is None:
+            return None
+        digits.append(sounds[matched])
+        position += len(matched)
+    return "".join(digits) if digits else None
+
+
+def parse_frequency(text):
+    try:
+        frequency = int(text)
+    except ValueError:
+        return 0
+    return frequency if frequency >= 0 else 0
+
+
+def collect_words(csv_path, mapping, sounds):
+    # Longest phonetic name first, so "Yu" is not consumed as "Y".
+    ordered = sorted(sounds, key=len, reverse=True)
     best = {}
     skipped = 0
     with csv_path.open(encoding="utf-8") as handle:
@@ -127,15 +173,17 @@ def collect_words(csv_path, mapping):
             if not parts or not parts[0]:
                 continue
             word = parts[0]
-            frequency = 0
-            if len(parts) > 1:
-                try:
-                    frequency = int(parts[-1])
-                except ValueError:
-                    frequency = 0
-            if frequency < 0:
-                frequency = 0
-            sequence = digit_sequence(word, mapping)
+            if sounds:
+                # word, phonetic, optional frequency. The letters of the word
+                # itself are not on the digit keys.
+                if len(parts) < 2 or not parts[1]:
+                    skipped += 1
+                    continue
+                frequency = parse_frequency(parts[2]) if len(parts) > 2 else 0
+                sequence = sound_sequence(parts[1], sounds, ordered)
+            else:
+                frequency = parse_frequency(parts[-1]) if len(parts) > 1 else 0
+                sequence = digit_sequence(word, mapping)
             if sequence is None:
                 skipped += 1
                 continue
@@ -250,21 +298,27 @@ def write_notice(notices, locale, dictionary):
     return doc.name, license_path.name
 
 
-def build_one(definition, output):
-    locale, dictionary, keys = parse_definition(definition)
-    if not locale or not dictionary or "2" not in keys:
-        print("skip %s: no locale, dictionary, or letter keys" % definition.name, file=sys.stderr)
+def build_layout(definition, output):
+    locale, dictionary, keys, sounds = parse_definition(definition)
+    if not locale or "2" not in keys:
+        print("skip %s: no locale or letter keys" % definition.name, file=sys.stderr)
+        return None
+    write_layout(output / ("%s.layout" % locale), keys)
+    return locale, dictionary, keys, sounds
+
+
+def build_word_list(locale, dictionary, keys, sounds, output):
+    if not dictionary:
+        print("skip %s dictionary: no dictionary file" % locale, file=sys.stderr)
         return False
     csv_path = DICTIONARIES / dictionary
     if not csv_path.is_file():
-        print("skip %s: missing %s" % (locale, csv_path), file=sys.stderr)
+        print("skip %s dictionary: missing %s" % (locale, csv_path), file=sys.stderr)
         return False
-    mapping = load_mapping(keys)
-    words, skipped = collect_words(csv_path, mapping)
+    words, skipped = collect_words(csv_path, load_mapping(keys), sounds)
     if not words:
-        print("skip %s: no words mapped" % locale, file=sys.stderr)
+        print("skip %s dictionary: no words mapped" % locale, file=sys.stderr)
         return False
-    write_layout(output / ("%s.layout" % locale), keys)
     write_database(output / ("%s.sqlite" % locale), words)
     print("%s: %d words, %d skipped" % (locale, len(words), skipped))
     return True
@@ -290,8 +344,9 @@ def read_locale_list(path):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output", type=Path, required=True)
-    parser.add_argument("--only", action="append", default=[], help="locale to build; repeatable")
-    parser.add_argument("--from-list", type=Path, help="locales to build, one per line")
+    parser.add_argument("--only", action="append", default=[], help="layout locale to build; repeatable")
+    parser.add_argument("--from-list", type=Path, help="layout locales to build, one per line")
+    parser.add_argument("--dictionaries", type=Path, help="locales that also get a word list, one per line")
     parser.add_argument("--notices", type=Path, help="where to write per-language doc and license files")
     args = parser.parse_args()
     reset_dir(args.output)
@@ -301,17 +356,34 @@ def main():
         if missing:
             raise SystemExit("language list must include %s" % ", ".join(missing))
     wanted = set(args.only) | set(listed)
+    dictionaries = set(read_locale_list(args.dictionaries)) if args.dictionaries else set()
+    if args.dictionaries:
+        missing = [locale for locale in REQUIRED_LOCALES if locale not in dictionaries]
+        if missing:
+            raise SystemExit("dictionary list must include %s" % ", ".join(missing))
+        outside = sorted(dictionaries - wanted) if wanted else []
+        if outside:
+            raise SystemExit("dictionary locales missing from the layout list: %s" % ", ".join(outside))
     if args.notices:
         reset_dir(args.notices)
     built = []
+    built_dictionaries = []
     notice_lines = []
     for definition in sorted(DEFINITIONS.glob("*.yml")):
-        locale, dictionary, _keys = parse_definition(definition)
+        locale, _dictionary, _keys, _sounds = parse_definition(definition)
         if wanted and locale not in wanted:
             continue
-        if not build_one(definition, args.output):
+        prepared = build_layout(definition, args.output)
+        if prepared is None:
             continue
+        locale, dictionary, keys, sounds = prepared
         built.append(locale)
+        if locale not in dictionaries:
+            print("%s: layout" % locale)
+            continue
+        if not build_word_list(locale, dictionary, keys, sounds, args.output):
+            continue
+        built_dictionaries.append(locale)
         if args.notices and dictionary:
             written = write_notice(args.notices, locale, dictionary)
             if written:
@@ -323,12 +395,16 @@ def main():
     if not built:
         raise SystemExit("no languages built")
     if args.from_list:
-        missing = [locale for locale in REQUIRED_LOCALES if locale not in built]
+        missing = [locale for locale in listed if locale not in built]
         if missing:
-            raise SystemExit("required languages were not built: %s" % ", ".join(missing))
+            raise SystemExit("layouts were not built: %s" % ", ".join(missing))
+    if args.dictionaries:
+        missing = [locale for locale in dictionaries if locale not in built_dictionaries]
+        if missing:
+            raise SystemExit("dictionaries were not built: %s" % ", ".join(missing))
     if args.notices:
         (args.notices / "files.list").write_text("\n".join(notice_lines) + "\n", encoding="utf-8")
-    print("built %d languages into %s" % (len(built), args.output))
+    print("built %d layouts and %d dictionaries into %s" % (len(built), len(built_dictionaries), args.output))
 
 
 if __name__ == "__main__":
