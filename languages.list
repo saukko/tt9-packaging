@@ -1,5 +1,5 @@
 # Copyright (c) 2026 Jolla Mobile Ltd.
-# Key mappings built into /usr/share/tt9 as <locale>.layout.
+# Key mappings built into /usr/share/keypad as <locale>.layout.
 # Word lists are dictionaries.list, not this file.
 ar-JO
 be-BY

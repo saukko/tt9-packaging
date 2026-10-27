@@ -24,7 +24,7 @@ DICTIONARIES = HERE / "tt9" / "app" / "languages" / "dictionaries"
 READMES = HERE / "tt9" / "docs" / "dictionaries"
 
 # A package build must produce these even when the list grows.
-REQUIRED_LOCALES = ("en", "fi-FI")
+REQUIRED_LOCALES = ("en", "de-DE", "fi-FI")
 
 # Word-list readmes are not named after the locale. None means upstream
 # shipped the dictionary without a notice.
